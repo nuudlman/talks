@@ -19,15 +19,289 @@
   <body>
     <div class="reveal">
       <div class="slides">
-        <section> <!-- title -->
-          <h2>Clang Static Analyzer:</h2>
-          <h2> Supporting Multithreaded Code</h2>
-          <p>Isaac Nudelman</p>
-          <img src="/src/assets/eurollvm2025.jxl" width="400"/>
-        </section>
+<!--        <section> &lt;!&ndash; title &ndash;&gt;-->
+<!--          <h2>Clang Static Analyzer:</h2>-->
+<!--          <h2> Supporting Multithreaded Code</h2>-->
+<!--          <p>Isaac Nudelman</p>-->
+<!--          <img src="/src/assets/eurollvm2025.jxl" width="400"/>-->
+<!--        </section>-->
+<!--        <section data-auto-animate>-->
+<!--          <div class="fragment semi-fade-out" data-fragment-index="2">-->
+<!--            <h3>We want the clang static analyzer to detect multithreading bugs</h3>-->
+<!--            <ul class="fragment fade-in" data-fragment-index="1">-->
+<!--              <li>Data races</li>-->
+<!--              <li>Deadlock</li>-->
+<!--            </ul>-->
+<!--          </div>-->
+<!--          <h3 class="fragment" data-fragment-index="2" data-id="analyzer_not_thread_aware">but the analyzer isn't thread aware</h3>-->
+<!--        </section>-->
+<!--        <section data-auto-animate>-->
+<!--          <h3 data-id="analyzer_not_thread_aware">The analyzer isn't thread aware</h3>-->
+<!--          -->
+<!--        </section>-->
+
         <section>
-          <h2>test2</h2>
-          <p>foo baz</p>
+          <h2>Clang Static Analyzer:</h2><h2>Supporting Multithreaded Code</h2>
+          <p>
+            Isaac Nudelman
+          </p>
+<!--          <p><small>Current Date: Wednesday, April 9, 2025</small></p>-->
+          <img src="/src/assets/eurollvm2025.jxl" width="400"/>
+          <aside class="notes">
+            <p>Hi everyone, I'm Isaac Nudelman, and today I want to talk about some foundational work we've been doing to make the Clang Static Analyzer understand multithreaded code.</p>
+            <p>Our ultimate goal is ambitious – things like data race and deadlock detection – but like any complex journey, it starts with the first step.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h2>The Problem: Spot the Bug?</h2>
+          <pre><code data-trim data-noescape>
+// Simplified Example (e.g., lz4 related)
+void worker_thread_func(void *data_ptr) {
+  Resource* res = (Resource*)data_ptr;
+  // Use the resource IMMEDIATELY
+  use_resource(res); // Potential use before init!
+  // ...
+}
+
+void main_thread() {
+  Resource my_resource;
+  pthread_t tid;
+  // Create thread, passing pointer to UNINITIALIZED resource
+  pthread_create(&tid, NULL, worker_thread_func, &my_resource);
+  // Initialize resource AFTER thread might have started
+  initialize_resource(&my_resource);
+  // ...
+  pthread_join(tid, NULL);
+}
+                </code></pre>
+          <p class="fragment">Why doesn't the Static Analyzer catch this today?</p>
+          <aside class="notes">
+            <p>Take a look at this code. In a single-threaded world, it might look perfectly fine. But introduce threads...</p>
+            <p>...and you can run into subtle, painful concurrency bugs. Maybe it's a data race, maybe it's using uninitialized data because one thread runs faster than expected, like potentially here. These are notoriously hard to find and debug.</p>
+            <p>So, you might ask: We have this powerful Clang Static Analyzer – why doesn't *it* find these bugs?</p>
+            <p><em>(Pause for effect, then advance to next slide)</em></p>
+          </aside>
+        </section>
+
+        <section>
+          <h2>The Problem: Islands of State</h2>
+          <p>The analyzer sees threads as separate universes.</p>
+          <div style="min-height: 300px; background-color: #333; border: 1px solid #666; display: flex; align-items: center; justify-content: center; margin: 20px 0;">
+            <p style="color: #eee;"><em>[VISUAL 1: Diagram - Disconnected state bubbles for main & thread_func]</em></p>
+          </div>
+          <p class="fragment">Goal: Build bridges between these islands.</p>
+          <aside class="notes">
+            <p>The answer lies in how the analyzer currently sees the world. <em>(Gesture to VISUAL 1)</em> It explores the code paths within the main thread and builds up a representation of its state – variables, memory, etc.</p>
+            <p>When it sees a thread created, it can often find the thread's starting function and analyze *that* function too, building up *its* state.</p>
+            <p>But here's the problem: It sees these as completely separate universes, or 'islands of state'. It understands what happens *on* each island, but has no idea how they connect or influence each other.</p>
+            <p><em>(Advance fragment)</em> To find cross-thread bugs, we need to build bridges. This talk is about how we built that first, crucial bridge: modeling the act of thread creation itself.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h2>The Plan: Building the First Bridge</h2>
+          <ul>
+            <li><strong>Ultimate Vision:</strong> Data race, deadlock detection</li>
+            <li class="fragment"><strong>Today's Focus (Step 1):</strong> Connect states via thread <em>creation</em></li>
+            <li class="fragment"><strong>Future Steps:</strong> Handle joins (graph), model interactions</li>
+            <li class="fragment"><strong>Guiding Principles:</strong>
+              <ul>
+                <li>Reuse existing checkers (no modifications!)</li>
+                <li>Portability (Desktop CPU -> Embedded DSP)</li>
+              </ul>
+            </li>
+            <li class="fragment"><strong>Non-Goals (for now):</strong> GPUs, OpenMP</li>
+          </ul>
+          <div class="fragment" style="min-height: 150px; background-color: #333; border: 1px solid #666; display: flex; align-items: center; justify-content: center; margin-top: 20px;">
+            <p style="color: #eee;"><em>[VISUAL 2: Diagram - State bubbles connected by a 'pthread_create' bridge]</em></p>
+          </div>
+          <aside class="notes">
+            <p>So, what's our plan?</p>
+            <p><em>(Frag 1)</em> The long-term vision is definitely those high-value concurrency checks.</p>
+            <p><em>(Frag 2)</em> But for today, we're focusing squarely on Step One: connecting the state of the thread creator to the state of the newly created thread, right at the point of creation. <em>(Point to VISUAL 2 when it appears)</em> Think of it as establishing that initial link.</p>
+            <p><em>(Frag 3)</em> Later, we can think about adding bridges for thread joins – turning this tree into a graph – and modeling more complex memory interactions.</p>
+            <p><em>(Frag 4)</em> Two key principles guided this work: First, whatever we do, existing checkers *must* continue to work without changes. We want to enhance the core, not break the ecosystem. Second, portability is crucial - standard CPUs to embedded systems.</p>
+            <p><em>(Frag 5)</em> And to keep scope manageable, we explicitly *aren't* tackling GPUs or higher-level APIs like OpenMP right now. Focus on fundamentals like pthreads.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h2>The Challenge: Thread Creation & The Wall</h2>
+          <p>How threads typically start (e.g., pthreads):</p>
+          <pre><code data-trim data-noescape>
+pthread_create(..., start_routine, arg)
+                    // ^ Function to run   ^ Data for function
+                </code></pre>
+          <p class="fragment">Current Analyzer Limitation: Symbolic execution hits a wall!</p>
+          <div class="fragment" style="min-height: 150px; background-color: #333; border: 1px solid #666; display: flex; align-items: center; justify-content: center; margin-top: 10px;">
+            <p style="color: #eee;"><em>[VISUAL: Diagram similar to Vis 2, but with analysis arrow hitting a 'Wall' at the bridge]</em></p>
+          </div>
+          <p class="fragment">Context escapes, the connection is lost.</p>
+          <aside class="notes">
+            <p>Okay, let's dive a bit deeper. How do threads typically start? Often with a platform API call. Using pthreads as our common example, you have `pthread_create`. <em>(Point to code/Vis 3)</em> The key arguments for us are the `start_routine` – the function pointer – and the `arg` – the data passed to it.</p>
+            <p><em>(Frag 1)</em> So what happens when the analyzer's symbolic execution engine encounters this call today?</p>
+            <p><em>(Frag 2)</em> It sees the function call, but it doesn't fundamentally understand the semantics. The analysis path effectively hits a wall. <em>(Point to wall visual)</em></p>
+            <p><em>(Frag 3)</em> The symbolic state, the context about variables and memory, just escapes. The connection between the creator and the created is lost at this point.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h2>The Core Idea: "Inline" the Analysis</h2>
+          <p>What if the analyzer pretends it saw a direct call?</p>
+          <pre><code data-trim data-noescape>
+// Analyzer sees:
+pthread_create(..., my_func, my_data);
+
+// Analyzer *acts as if* it saw:
+my_func(my_data); // Simulate this call right here!
+                </code></pre>
+          <p class="fragment">Clarification: This is <strong>analysis inlining</strong> within the symbolic execution engine, <em>not</em> compile-time code inlining.</p>
+          <div class="fragment" style="min-height: 200px; background-color: #333; border: 1px solid #666; display: flex; align-items: center; justify-content: center; margin-top: 10px;">
+            <p style="color: #eee;"><em>[VISUAL 4: Diagram - State flowing across the 'Analysis Inlining' bridge]</em></p>
+          </div>
+          <aside class="notes">
+            <p>This led us to the core idea: What if we could trick the analyzer?</p>
+            <p>When the engine sees `pthread_create` about to call `my_func` with `my_data`... what if we make it *act as if* it had just seen a direct, synchronous call to `my_func(my_data)` right at that point in the code?</p>
+            <p><em>(Frag 1)</em> Crucially, we're not changing the *compiled code*. This isn't compiler inlining. We are 'inlining' the *analysis* of the thread function into the creator's analysis path within the symbolic execution engine itself. <em>(Emphasize distinction)</em></p>
+            <p><em>(Frag 2)</em> If we can do this <em>(Point to VISUAL 4)</em>, we establish that direct connection. State from the main thread flows into the analysis of the thread function, bridging those islands.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h2>Finding the Right Place: Attempt 1</h2>
+          <h3>The Checker Approach</h3>
+          <ul>
+            <li>Logical first thought: Write a checker plugin.</li>
+            <li>Checker detects `pthread_create`.</li>
+            <li>Extracts `start_routine` and `arg`.</li>
+            <li>Tries to trigger analysis of the call...</li>
+          </ul>
+          <h3 class="fragment" style="color: #ff6666;">Roadblock!</h3>
+          <p class="fragment">Checkers are observers - they can't fundamentally <strong>drive or redirect</strong> the core symbolic execution flow needed for analysis inlining.</p>
+          <p class="fragment"><em>Dead end for this approach.</em></p>
+          <aside class="notes">
+            <p>Okay, neat idea. How do we implement it? Our first instinct: 'Let's write a checker!' Checkers are plugins, relatively easy to write.</p>
+            <p>The plan was: detect `pthread_create`, extract the function and argument, and then somehow... tell the engine to analyze that call.</p>
+            <p><em>(Frag 1)</em> ...And we hit a wall. A different kind of wall.</p>
+            <p><em>(Frag 2)</em> The problem is fundamental: Checkers are primarily *observers*. They inspect state, report warnings, but aren't designed to *fundamentally redirect* the core analysis path like this requires.</p>
+            <p><em>(Frag 3)</em> So, this 'easy' approach was a dead end for what we needed.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h2>Finding the Right Place: Attempt 2</h2>
+          <h3>Modify the Core Engine (`ExprEngine`)</h3>
+          <ol>
+            <li>Add config flag (`experimental-enable-thread-inlining`).</li>
+            <li class="fragment">Intercept `pthread_create` during call evaluation (e.g., `VisitCallExpr`).</li>
+            <li class="fragment">Extract `start_routine` function & `arg` data.</li>
+            <li class="fragment"><strong>Synthesize</strong> a new `CallExpr` AST node representing `start_routine(arg)`.</li>
+            <li class="fragment">Use engine's <strong>existing</strong> `ExprEngine::inlineCall` on the synthesized call!</li>
+          </ol>
+          <aside class="notes">
+            <p>So, if the checker approach from the outside doesn't work, we have to go deeper – into the analyzer's core, the `ExprEngine` itself, which *does* control the analysis flow.</p>
+            <p>This involved a few steps:</p>
+            <p><em>(Point 1)</em> First, adding an opt-in config flag.</p>
+            <p><em>(Frag 1)</em> Second, finding the right spot in the `ExprEngine` – where it processes function calls.</p>
+            <p><em>(Frag 2)</em> Third, when we see `pthread_create` (and flag is on), extract the needed parts.</p>
+            <p><em>(Frag 3)</em> Fourth – key step – *synthesize* an AST node for the call we want to simulate.</p>
+            <p><em>(Frag 4)</em> And finally, the magic: Feed this synthesized call into the engine's *existing*, powerful function inlining logic (`inlineCall`). We leverage existing infrastructure! <em>(Good point for compiler devs)</em>.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h2>Did It Work? Testing!</h2>
+          <h3>Validation with LIT</h3>
+          <div style="min-height: 100px; background-color: #333; border: 1px solid #666; display: flex; align-items: center; justify-content: center; margin: 10px 0;">
+            <p style="color: #eee;"><em>[Optional VISUAL: Tiny LIT test showing CHECK directives passing]</em></p>
+          </div>
+          <p>Small, focused tests confirmed state flows correctly.</p>
+
+          <h3 class="fragment">Battle Testing with `memcached`</h3>
+          <p class="fragment">Found a crash... in our <em>analyzer</em> code! (Oops)</p>
+          <p class="fragment">Fixed the bugs -> Robustness improved.</p>
+          <aside class="notes">
+            <p>Alright, we modified the core engine. Did it actually work?</p>
+            <p>First, validation with LIT – the LLVM Integration Tester. Small C/C++ snippets with `pthread_create` and `CHECK` directives asserted that state flowed correctly. <em>(Refer to optional visual if present)</em>. Good news: the basic mechanism worked!</p>
+            <p><em>(Frag 1)</em> But unit tests aren't enough. We needed real-world code. So we ran it on `memcached` – complex, multithreaded.</p>
+            <p><em>(Frag 2)</em> And... it found a crash! Excellent! Except... the crash was *in our new analyzer code*. <em>(Self-deprecating humor)</em> Good reminder: test your tools thoroughly!</p>
+            <p><em>(Frag 3)</em> We fixed those bugs, making the implementation more robust.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h2>The Results: Wins!</h2>
+          <ol>
+            <li>
+              <strong>Existing Checkers Just Work!</strong>
+              <p><small>No modifications needed. Connected state flows through them.</small></p>
+            </li>
+            <li class="fragment">
+              <strong>Negligible Overhead.</strong>
+              <div style="min-height: 50px; background-color: #333; border: 1px solid #666; display: inline-flex; align-items: center; justify-content: center; padding: 5px; margin-left: 10px;">
+                <p style="color: #eee; font-size: smaller;"><em>[Optional VISUAL: e.g., "1% slowdown on BenchX"]</em></p>
+              </div>
+              <p><small>Crucial for practical adoption.</small></p>
+            </li>
+            <li class="fragment">
+              <strong>New Bugs Found!</strong>
+              <p><small>Foundation already enables finding previously invisible bugs.</small></p>
+            </li>
+          </ol>
+          <aside class="notes">
+            <p>Okay, after fixing our own bugs, what are the results of *this approach*?</p>
+            <p><em>(Point 1)</em> Win number one, and this was critical: Existing checkers – memory leaks, use-after-free, etc. – they *just work*. No changes needed. The connected state flows through them, potentially revealing new issues.</p>
+            <p><em>(Frag 1)</em> Win number two: Performance. Overhead seems negligible. <em>(Refer to optional visual: "On benchmark X, we saw less than a 1% increase...")</em> Important for usability.</p>
+            <p><em>(Frag 2)</em> And Win number three: It actually finds *new* bugs! Even this foundational step lets the analyzer spot issues it was previously blind to.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h2>Results: Example Bug Found (e.g., lz4)</h2>
+          <p>Issue: Resource used by thread potentially before initialization.</p>
+          <div style="min-height: 150px; background-color: #333; border: 1px solid #666; display: flex; align-items: center; justify-content: center; margin: 10px 0;">
+            <p style="color: #eee;"><em>[VISUAL 5: Relevant lz4 (or similar) code snippet]</em></p>
+          </div>
+
+          <p class="fragment">With thread-aware analysis enabled:</p>
+          <div class="fragment" style="min-height: 100px; background-color: #333; border: 1px solid #666; display: flex; align-items: center; justify-content: center; margin-top: 10px;">
+            <p style="color: #eee;"><em>[VISUAL 6: Actual CSA warning message showing cross-thread path]</em></p>
+          </div>
+          <p class="fragment">Analyzer sees the potential interaction across the bridge!</p>
+          <aside class="notes">
+            <p>Let's look at that example again, or this similar one from lz4. <em>(Point to VISUAL 5)</em>. The issue here involves [briefly explain the initialization dependency].</p>
+            <p><em>(Frag 1)</em> Before our change, the analyzer saw separate islands – no warning. But *with* the analysis inlining enabled...</p>
+            <p><em>(Frag 2)</em> ...the analyzer follows the state flow *across* the thread creation boundary. It sees the potential problematic interaction and generates this warning! <em>(Point to VISUAL 6, highlight path if possible)</em>.</p>
+            <p><em>(Frag 3)</em> This demonstrates the immediate value of connecting the states.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h2>Conclusion & Future Work</h2>
+          <h3>Recap</h3>
+          <ul>
+            <li>Built the first bridge for thread awareness in CSA.</li>
+            <li>Mechanism: "Inline" thread function analysis in `ExprEngine`.</li>
+            <li>Impact: Foundation laid, checkers benefit, low overhead, finds new bugs.</li>
+          </ul>
+          <h3 class="fragment">Next Steps</h3>
+          <ul>
+            <li class="fragment"><strong>Upstream</strong> this foundational work! (Feedback/collaboration welcome!)</li>
+            <li class="fragment">Build actual <strong>thread-safety checkers</strong> (races, deadlocks) on this foundation.</li>
+          </ul>
+          <h2 class="fragment">Thank You!</h2>
+          <p class="fragment"><small>Questions? Contact: [Your Email / Link to Patch/Code]</small></p>
+          <aside class="notes">
+            <p>So, to wrap up: We've successfully built that first, crucial bridge for thread awareness in the Clang Static Analyzer.</p>
+            <p>We did this by 'inlining' the analysis of thread start functions directly into the creator's analysis path within the core `ExprEngine`.</p>
+            <p>The impact is significant: solid foundation, works with existing checks, low overhead, and already finding real bugs.</p>
+            <p><em>(Frag 1)</em> What's next?</p>
+            <p><em>(Frag 2)</em> We're working on upstreaming this foundational patch. <em>(Engage audience)</em> We welcome feedback and collaboration from the community!</p>
+            <p><em>(Frag 3)</em> And once this is in place, the *real* fun begins: building dedicated thread-safety checkers – looking for data races, deadlocks, and more – on top of this new thread-aware infrastructure.</p>
+            <p><em>(Frag 4)</em> Thank you for your time.</p>
+            <p><em>(Frag 5)</em> I'm happy to take any questions. <em>(Point to contact info if slide has it)</em>.</p>
+          </aside>
         </section>
       </div>
     </div>
