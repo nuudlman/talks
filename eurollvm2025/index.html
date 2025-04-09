@@ -7,6 +7,7 @@
 
     <link rel="stylesheet" href="/node_modules/reveal.js/dist/reset.css">
     <link rel="stylesheet" href="/node_modules/reveal.js/dist/reveal.css">
+    <link rel="stylesheet" href="/src/assets/charter/charter.css">
   </head>
   <body>
     <div class="reveal">
@@ -14,6 +15,9 @@
         <section>
           <h2>test</h2>
           <p>foo bar</p>
+          <aside class="notes">
+            this is a note
+          </aside>
         </section>
         <section>
           <h2>test2</h2>
@@ -21,16 +25,17 @@
         </section>
       </div>
     </div>
-<!--    <script type="module" src="/src/main.js"></script>-->
     <script type="module">
       import Reveal from "reveal.js";
       import Notes from "reveal.js/plugin/notes/notes.esm.js";
       import Zoom from "reveal.js/plugin/zoom/zoom.esm.js";
+      import Highlight from "reveal.js/plugin/highlight/highlight.esm.js";
 
 
       Reveal.initialize({
         hash: true,
         center: false,
+        plugins: [Highlight, Zoom, Notes]
         // slideNumber: true,
       });
     </script>
