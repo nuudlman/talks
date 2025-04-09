@@ -7,22 +7,23 @@
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,200..800&display=swap" rel="stylesheet">
+
 
     <link rel="stylesheet" href="/node_modules/reveal.js/dist/reset.css">
     <link rel="stylesheet" href="/node_modules/reveal.js/dist/reveal.css">
+    <link rel="stylesheet" href="/node_modules/reveal.js/dist/theme/serif.css">
     <link rel="stylesheet" href="/src/assets/charter/charter.css">
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,200..800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/src/style.css">
   </head>
   <body>
     <div class="reveal">
       <div class="slides">
-        <section>
-          <h2>test</h2>
-          <p>foo bar</p>
-          <aside class="notes">
-            this is a note
-          </aside>
+        <section> <!-- title -->
+          <h2>Clang Static Analyzer:</h2>
+          <h2> Supporting Multithreaded Code</h2>
+          <p>Isaac Nudelman</p>
+          <img src="/src/assets/eurollvm2025.jxl" width="400"/>
         </section>
         <section>
           <h2>test2</h2>
@@ -38,8 +39,12 @@
 
 
       Reveal.initialize({
+        width: 1920,
+        height: 1080,
+        // margin: 0.4,
         hash: true,
-        center: false,
+        // center: false,
+        progress: true,
         plugins: [Highlight, Zoom, Notes]
         // slideNumber: true,
       });
